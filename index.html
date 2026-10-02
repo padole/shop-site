@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Little Shop</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<style>
+:root{--bg:#faf7f2;--fg:#231f1b;--mut:#7a7068;--ac:#c2532d;--card:#fff;--ln:#e8e1d8}
+@media(prefers-color-scheme:dark){:root{--bg:#181512;--fg:#f2ece4;--mut:#9a9088;--card:#241f1b;--ln:#3a332c}}
+*{box-sizing:border-box}body{margin:0;font:16px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--fg)}
+header{display:flex;justify-content:space-between;align-items:center;padding:16px 24px;border-bottom:1px solid var(--ln)}
+header h1{margin:0;font:700 22px Georgia,serif;cursor:pointer}nav{display:flex;gap:10px;align-items:center}
+main{max-width:900px;margin:0 auto;padding:24px}
+button{font:inherit;padding:8px 14px;border-radius:8px;border:1px solid var(--ln);background:var(--card);color:var(--fg);cursor:pointer}
+button.p{background:var(--ac);border-color:var(--ac);color:#fff}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px}
+.card{background:var(--card);border:1px solid var(--ln);border-radius:12px;padding:16px}
+.card .e{font-size:56px;text-align:center}.mut{color:var(--mut);font-size:14px}
+.row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--ln)}
+input,textarea{width:100%;padding:10px;margin:4px 0 12px;border-radius:8px;border:1px solid var(--ln);background:var(--card);color:var(--fg);font:inherit}
+.err{color:#d33}
+</style></head><body>
+<header><h1 onclick="go('shop')">Little Shop</h1>
+<nav><span id="who" class="mut"></span><button id="auth"></button><button onclick="go('cart')">Cart (<span id="cnt">0</span>)</button></nav></header>
+<main id="app"></main>
+<script>
+// ==== CONFIG: paste from Supabase → Project Settings → API ====
+const SUPABASE_URL = "https://klssanaxdrcgyekznbid.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_fhPlxbpfFXedeDyMSZb9hA_V5YI-3YE";
+// ==============================================================
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const $ = s => document.querySelector(s), app = $("#app");
+const money = c => "$" + (c/100).toFixed(2);
+let products = [], user = null, view = "shop", msg = "";
+let cart = JSON.parse(localStorage.getItem("cart") || "{}"); // {productId: qty}
+const save = () => { localStorage.setItem("cart", JSON.stringify(cart)); $("#cnt").textContent = Object.values(cart).reduce((a,b)=>a+b,0); };
+
+async function init(){
+  const { data:{ session } } = await sb.auth.getSession(); user = session?.user || null;
+  sb.auth.onAuthStateChange((_e, s) => { user = s?.user || null; nav(); render(); });
+  const { data, error } = await sb.from("products").select("*").order("name");
+  products = data || []; if (error) msg = error.message;
+  nav(); save(); render();
+}
+function nav(){
+  $("#who").textContent = user?.email || "";
+  $("#auth").textContent = user ? "Sign out" : "Sign in with Google";
+  $("#auth").onclick = () => user ? sb.auth.signOut()
+    : sb.auth.signInWithOAuth({ provider:"google", options:{ redirectTo: location.href.split("#")[0] } });
+}
+const go = v => { view = v; render(); };
+const add = id => { cart[id] = (cart[id]||0)+1; save(); render(); };
+const chg = (id,d) => { cart[id] = (cart[id]||0)+d; if (cart[id] <= 0) delete cart[id]; save(); render(); };
+const items = () => Object.entries(cart).map(([id,q]) => ({ p: products.find(p=>p.id===id), q })).filter(x=>x.p);
+const total = () => items().reduce((a,x)=>a+x.p.price_cents*x.q, 0);
+
+function render(){
+  if (view==="shop") app.innerHTML = `<p class="err">${msg}</p><div class="grid">${products.map(p=>`
+    <div class="card"><div class="e">${p.image}</div><b>${p.name}</b><div class="mut">${p.description}</div>
+    <div class="row" style="border:0"><b>${money(p.price_cents)}</b><button class="p" onclick="add('${p.id}')">Add</button></div></div>`).join("")}</div>`;
+  if (view==="cart") { const it = items(); app.innerHTML = `<h2>Your cart</h2>` + (it.length ? it.map(({p,q})=>`
+    <div class="row"><span>${p.image} ${p.name}</span><span><button onclick="chg('${p.id}',-1)">−</button> ${q}
+    <button onclick="chg('${p.id}',1)">+</button></span><b>${money(p.price_cents*q)}</b></div>`).join("")
+    + `<div class="row"><b>Total</b><b>${money(total())}</b></div><p><button class="p" onclick="go('checkout')">Checkout</button></p>`
+    : `<p class="mut">Cart is empty.</p>`); }
+  if (view==="checkout") {
+    if (!items().length) return go("cart");
+    if (!user) { app.innerHTML = `<h2>Checkout</h2><p>Please sign in to place your order.</p>`; return; }
+    app.innerHTML = `<h2>Checkout</h2><p class="mut">Confirmation will be sent to ${user.email}</p>
+    <label>Full name<input id="nm" value="${user.user_metadata?.full_name||""}"></label>
+    <label>Shipping address<textarea id="ad" rows="3"></textarea></label>
+    <div class="row"><b>Total</b><b>${money(total())}</b></div><p id="m" class="err"></p>
+    <button class="p" id="pay" onclick="place()">Place order</button>`; }
+  if (view==="done") app.innerHTML = `<h2>Thank you! 🎉</h2><p>${msg}</p><button onclick="go('shop')">Keep shopping</button>`;
+}
+async function place(){
+  const name = $("#nm").value.trim(), addr = $("#ad").value.trim();
+  if (!name || !addr) return $("#m").textContent = "Name and address are required.";
+  $("#pay").disabled = true;
+  const { data: id, error } = await sb.rpc("place_order", {
+    p_items: items().map(x=>({ id:x.p.id, qty:x.q })), p_name:name, p_address:addr });
+  if (error) { $("#m").textContent = error.message; $("#pay").disabled = false; return; }
+  const { error: mailErr } = await sb.functions.invoke("send-confirmation", { body:{ order_id:id } });
+  cart = {}; save();
+  msg = `Order #${id.slice(0,8)} saved. ` + (mailErr ? "We couldn't send the confirmation email." : "A confirmation email is on its way.");
+  go("done");
+}
+init();
+</script></body></html>
